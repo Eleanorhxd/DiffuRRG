@@ -73,50 +73,7 @@ def noise_like(shape, device, repeat=False):
     return repeat_noise() if repeat else noise()
 
 
-class GaussianDiffusion(nn.Module):
-    def __init__(
-        self,
-        denoise_fn, 
-        segment_fn,
-        image_size,
-        channels=3,
-        loss_type='l1',
-        conditional=True,
-        schedule_opt=None
-    ):
-        super().__init__()
-        self.channels = channels
-        self.image_size = image_size
-        # self.denoise_fn = denoise_fn# 没有伪标签
-        self.denoise_fn_model = denoise_fn  # rename original unet # 伪标签使用
-        self.segment_fn = segment_fn
-        self.conditional = conditional
-        self.loss_type = loss_type
-        if schedule_opt is not None:
-            pass
-#         # xinjia
-        self.cond_proj = nn.Linear(1024, 3)
-        self.cond_to_img = nn.Linear(1024, 3)
         
-        
-
-    def denoise_fn(self, x, t, cond_emb=None):
-        """
-        调用底层 unet 去噪，并在有伪标签引导时注入额外条件
-        x: (B, 3, H, W)
-        cond_emb: (B, 1024, 1, 1)
-        """
-        latent = self.denoise_fn_model(x, t)  # 原始 U-Net 输出 latent，shape: (B, 3, H, W)
-
-        if cond_emb is not None:
-        # cond_emb: (B, 1024, 1, 1)
-            cond_emb_proj = cond_emb.squeeze(-1).squeeze(-1)  # (B, 1024)
-            cond_emb_proj = self.cond_to_img(cond_emb_proj)   # (B, 3)
-            cond_emb_proj = cond_emb_proj[:, :, None, None]   # (B, 3, 1, 1)
-
-            latent = latent + cond_emb_proj  # broadcast 加法
-
-        return latent
 
 
 
@@ -139,9 +96,7 @@ class GaussianDiffusion(nn.Module):
     def set_new_noise_schedule(self, schedule_opt, device):
         to_torch = partial(torch.tensor, dtype=torch.float32, device=device)
         
-        #===========================新修改====================================
-        schedule = schedule_opt['schedule']
-        n_timestep = schedule_opt['n_timestep']
+
         # ========== 1. 根据调度类型调用 make_beta_schedule ==========
         if schedule in ['linear', 'quad', 'warmup10', 'warmup50']:
             betas = make_beta_schedule(
@@ -233,10 +188,7 @@ class GaussianDiffusion(nn.Module):
             self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    # def p_mean_variance(self, x, t, clip_denoised: bool, condition_x=None):# 不使用伪标签引导
-    #     # x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, t))
-    #     x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, t))
-        # 使用伪标签引导
+
     def p_mean_variance(self, x, t, clip_denoised: bool, condition_x=None, cond_emb=None):
         # x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, t))
         x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, t, cond_emb))
@@ -251,20 +203,13 @@ class GaussianDiffusion(nn.Module):
     def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, condition_x=None, cond_emb=None):
     # def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, condition_x=None):# 不使用伪标签引导
         b, *_, device = *x.shape, x.device
-        # model_mean, _, model_log_variance = self.p_mean_variance(
-        #     x=x, t=t, clip_denoised=clip_denoised, condition_x=condition_x)
-        # #new
-        model_mean, _, model_log_variance = self.p_mean_variance(
-            x=x, t=t, clip_denoised=clip_denoised, cond_emb=cond_emb) # 使用伪标签引导
-        #     x=x, t=t, clip_denoised=clip_denoised)
-        
         noise = noise_like(x.shape, device, repeat_noise)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
     def p_sample_segment(self, x_in, opt, cond_emb=None):
-    # def p_sample_segment(self, x_in, opt):# 不使用伪标签引导
+ 
         device = self.betas.device
         x_start_ = x_in['A']
         segm_V = torch.zeros_like(x_start_)
@@ -332,16 +277,7 @@ class GaussianDiffusion(nn.Module):
         fractal = torch.eye(2)[:, torch.clamp_min(x_in['F'][:, 0], 0).type(torch.long)].transpose(0, 1)
         synt_A = self.segment_fn(torch.cat([B_noisy, B_latent], dim=1), fractal.to(device))
 
-        #### Cycle path ####
-        f_noisy = self.q_sample(x_start=synt_A, t=t_a, noise=noise)
-        # f_recon = self.denoise_fn(f_noisy, t_a)
-        f_recon = self.denoise_fn(f_noisy, t_a, cond_emb)
-        mask_F = self.segment_fn(torch.cat([f_noisy, f_recon], dim=1))
 
-        l_dif = self.loss_func(noise, B_latent) 
-        l_dif = l_dif.sum() / int(b * c * h * w)
-        l_cyc = self.loss_cyc(mask_F, x_in['F'])
-        return [A_noisy, A_latent, B_latent, mask_V, synt_A, mask_F], [l_dif, l_cyc]
 
     def forward(self, x, *args, **kwargs):
         return self.p_losses(x, *args, **kwargs)
