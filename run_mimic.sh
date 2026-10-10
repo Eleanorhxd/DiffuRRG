@@ -1,0 +1,32 @@
+#!/bin/bash
+python main.py \
+  --exp_name DiffuRRG \
+  --dataset_name mimic_cxr \
+  --label_path ../DiffuRRG/files/mimic_cxr/labels_all_one.json \
+  --max_seq_length 100 \
+  --threshold 10 \
+  --batch_size 64 \
+  --epochs 30 \
+  --lr_ve 5e-5 \
+  --lr_ed 1e-4 \
+  --save_dir ../DiffuRRG/results/mimic_cxr \
+  --ve_name densenet121 \
+  --ed_name r2gen \
+  --early_stop 10 \
+  --d_vf 768 \
+  --weight_decay 5e-5 \
+  --optim Adam \
+  --decay_epochs 50 \
+  --warmup_epochs 3 \
+  --warmup_lr 5e-6 \
+  --lr_scheduler step \
+  --decay_rate 0.8 \
+  --seed 456789 \
+  --randaug \
+  --addcls \
+  --cls_w 1 \
+  --fbl \
+  --attn_cam \
+  --layer_id 2 \
+  --attn_method max \
+  --mse_w 0.5
